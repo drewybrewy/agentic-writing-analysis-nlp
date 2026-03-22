@@ -4,7 +4,7 @@
 ### Frontend
 - React (Vite)
 - TypeScript
-- Tailwind CSS (assumed)
+- Tailwind CSS
 - Component-based UI
 
 ### Backend
@@ -55,7 +55,7 @@ uvicorn main:app --reload
 
 ```
 
-###Frontend
+## Frontend
 
 ```bash
 cd frontend
