@@ -1,8 +1,9 @@
-from typing import TypedDict, List, Annotated
+from typing import TypedDict, List, Annotated, Dict, Any
 from langchain_core.messages import HumanMessage
 from langgraph.graph import StateGraph, START, END
 
 from langchain_groq import ChatGroq
+from pydantic import BaseModel, Field
 import os
 import json
 from dotenv import load_dotenv
@@ -28,6 +29,48 @@ class AnalysisState(TypedDict):
     ai_signal_paragraph: str
     master_guidance: str
 
+# --- Pydantic Models for Structured Output ---
+class VisionOutput(BaseModel):
+    headline: str = Field(description="One concise sentence summarizing the manuscript's primary goal and success potential (max 15 words)")
+    signals: List[str] = Field(description="2-4 short phrases detecting content type and detectable goals")
+    verdict: str = Field(description="One short label (e.g., 'Actionable goals', 'Interpretive flow', 'Technical prose')")
+    analysis: str = Field(description="Full detailed paragraph analysis")
+
+class ThematicOutput(BaseModel):
+    headline: str = Field(description="One concise sentence summarizing the thematic quality (max 15 words)")
+    signals: List[str] = Field(description="2-4 short key phrases highlighting important findings (2-5 words each)")
+    verdict: str = Field(description="One short label (e.g., 'Well-developed', 'Needs depth', 'Partially aligned')")
+    analysis: str = Field(description="Full detailed paragraph analysis")
+
+class SentimentOutput(BaseModel):
+    headline: str = Field(description="1-line summary of the node's key judgment (max 15 words)")
+    signals: List[str] = Field(description="2-4 short phrases capturing key insights (2-5 words each)")
+    verdict: str = Field(description="Short evaluative label (e.g., 'Consistent tone', 'Audience mismatch', 'Highly persuasive')")
+    analysis: str = Field(description="Full detailed paragraph analysis")
+
+class LexicalOutput(BaseModel):
+    headline: str = Field(description="1-line summary of the node's key judgment (max 15 words)")
+    signals: List[str] = Field(description="2-4 short phrases capturing key insights (2-5 words each)")
+    verdict: str = Field(description="Short evaluative label (e.g., 'Clear phrasing', 'Complex sentences', 'Grade mismatch')")
+    analysis: str = Field(description="Full detailed paragraph analysis")
+
+class AiSignalHighlight(BaseModel):
+    good: str = Field(description="Exact sentence or short excerpt where flow works well")
+    issue: str = Field(description="Exact sentence or short excerpt where flow breaks or feels awkward")
+
+class AiSignalOutput(BaseModel):
+    headline: str = Field(description="1-line summary of flow quality (max 15 words)")
+    signals: List[str] = Field(description="2-4 short phrases about rhythm/flow")
+    verdict: str = Field(description="Short label describing flow quality")
+    analysis: str = Field(description="Full detailed paragraph analysis")
+    highlight: AiSignalHighlight
+
+class MasterGuidanceOutput(BaseModel):
+    headline: str = Field(description="1-line executive summary of the review (max 15 words)")
+    signals: List[str] = Field(description="2-4 short phrases capturing rationale highlights")
+    verdict: str = Field(description="Status label: GOOD TO GO | MINOR REVISIONS | NEEDS WORK")
+    analysis: str = Field(description="A single, professional paragraph containing the full editor's guidance")
+
 # Swap this one line, and the rest of your graph stays the same!
 llm = ChatGroq(model_name="llama-3.3-70b-versatile", groq_api_key=os.getenv("groq_api_key"))
 
@@ -48,7 +91,7 @@ def vision_node(state: AnalysisState):
     
     TEXT TO ANALYZE:
     <text_block>
-    {state['text'][:1000]}
+    {state['text'][:30000]}
     </text_block>
     
     Match your analysis tone to the input style:
@@ -82,19 +125,9 @@ def vision_node(state: AnalysisState):
       "analysis": "Full detailed paragraph based on the TASK logic above"
     }}
     """
-    res = llm.invoke([HumanMessage(content=prompt)])
-    
-    try:
-        content = res.content
-        if "```json" in content:
-            content = content.split("```json")[1].split("```")[0].strip()
-        elif "```" in content:
-            content = content.split("```")[1].split("```")[0].strip()
-        
-        parsed_object = json.loads(content)
-        return {"vision_summary": parsed_object}
-    except Exception:
-        return {"vision_summary": {"headline": "Analytical grounding successful", "signals": ["Context extracted"], "verdict": "Grounded", "analysis": res.content}}
+    structured_llm = llm.with_structured_output(VisionOutput)
+    res = structured_llm.invoke([HumanMessage(content=prompt)])
+    return {"vision_summary": res.dict() if hasattr(res, 'dict') else res}
 
 # --- NODE 1: Thematic Consultant ---
 def thematic_node(state: AnalysisState):
@@ -108,9 +141,8 @@ def thematic_node(state: AnalysisState):
     
     TEXT TO ANALYZE:
     <text_block>
-    {state['text'][:1500]}
+    {state['text'][:30000]}
     </text_block>
-
     Match your analysis tone to the input style:
 
     - Essay / Personal → conversational, interpretive, reflective
@@ -149,21 +181,9 @@ def thematic_node(state: AnalysisState):
       "analysis": "Full detailed paragraph based on the TASK logic above"
     }}
     """
-    res = llm.invoke([HumanMessage(content=prompt)])
-    
-    try:
-        content = res.content
-        # Clean potential markdown wrapping
-        if "```json" in content:
-            content = content.split("```json")[1].split("```")[0].strip()
-        elif "```" in content:
-            content = content.split("```")[1].split("```")[0].strip()
-        
-        parsed_object = json.loads(content)
-        return {"thematic_paragraph": parsed_object}
-    except Exception:
-        # Fallback to raw string if parsing fails
-        return {"thematic_paragraph": res.content}
+    structured_llm = llm.with_structured_output(ThematicOutput)
+    res = structured_llm.invoke([HumanMessage(content=prompt)])
+    return {"thematic_paragraph": res.dict() if hasattr(res, 'dict') else res}
 
 
 # --- NODE 2: Sentiment Consultant ---
@@ -177,9 +197,8 @@ def sentiment_node(state: AnalysisState):
     
     TEXT TO ANALYZE:
     <text_block>
-    {state['text'][:1500]}
+    {state['text'][:30000]}
     </text_block>
-
     Match your analysis tone to the input style:
 
     - Essay / Personal → conversational, interpretive, reflective
@@ -213,19 +232,9 @@ def sentiment_node(state: AnalysisState):
       "analysis": "Full detailed paragraph based on the TASK logic above"
     }}
     """
-    res = llm.invoke([HumanMessage(content=prompt)])
-    
-    try:
-        content = res.content
-        if "```json" in content:
-            content = content.split("```json")[1].split("```")[0].strip()
-        elif "```" in content:
-            content = content.split("```")[1].split("```")[0].strip()
-        
-        parsed_object = json.loads(content)
-        return {"sentiment_paragraph": parsed_object}
-    except Exception:
-        return {"sentiment_paragraph": res.content}
+    structured_llm = llm.with_structured_output(SentimentOutput)
+    res = structured_llm.invoke([HumanMessage(content=prompt)])
+    return {"sentiment_paragraph": res.dict() if hasattr(res, 'dict') else res}
 
 # --- NODE 3: Lexical Consultant ---
 def lexical_node(state: AnalysisState):
@@ -239,9 +248,8 @@ def lexical_node(state: AnalysisState):
     
     TEXT TO ANALYZE:
     <text_block>
-    {state['text'][:1500]}
+    {state['text'][:30000]}
     </text_block>
-    
     Match your analysis tone to the input style:
 
     - Essay / Personal → conversational, interpretive, reflective
@@ -274,19 +282,9 @@ def lexical_node(state: AnalysisState):
       "analysis": "Full detailed paragraph based on the TASK logic above"
     }}
     """
-    res = llm.invoke([HumanMessage(content=prompt)])
-    
-    try:
-        content = res.content
-        if "```json" in content:
-            content = content.split("```json")[1].split("```")[0].strip()
-        elif "```" in content:
-            content = content.split("```")[1].split("```")[0].strip()
-        
-        parsed_object = json.loads(content)
-        return {"lexical_paragraph": parsed_object}
-    except Exception:
-        return {"lexical_paragraph": res.content}
+    structured_llm = llm.with_structured_output(LexicalOutput)
+    res = structured_llm.invoke([HumanMessage(content=prompt)])
+    return {"lexical_paragraph": res.dict() if hasattr(res, 'dict') else res}
 
 def ai_signal_node(state: AnalysisState):
     text = state.get("text", "")
@@ -308,9 +306,8 @@ def ai_signal_node(state: AnalysisState):
     
     TEXT TO ANALYZE:
     <text_block>
-    {text[:1200]}
+    {text[:30000]}
     </text_block>
-
     AI SIGNAL (USE AS HINTS, NOT TRUTH):
     - Burstiness: {burstiness}
     - Predictability: {predictability}
@@ -358,19 +355,9 @@ def ai_signal_node(state: AnalysisState):
     }}
     """
 
-    res = llm.invoke([HumanMessage(content=prompt)])
-    
-    try:
-        content = res.content
-        if "```json" in content:
-            content = content.split("```json")[1].split("```")[0].strip()
-        elif "```" in content:
-            content = content.split("```")[1].split("```")[0].strip()
-        
-        parsed_object = json.loads(content)
-        return {"ai_signal_paragraph": parsed_object}
-    except Exception:
-        return {"ai_signal_paragraph": res.content}
+    structured_llm = llm.with_structured_output(AiSignalOutput)
+    res = structured_llm.invoke([HumanMessage(content=prompt)])
+    return {"ai_signal_paragraph": res.dict() if hasattr(res, 'dict') else res}
 
 # --- NODE 5: Master Guidance Consultant ---
 def master_guidance_node(state: AnalysisState):
@@ -420,19 +407,9 @@ def master_guidance_node(state: AnalysisState):
       "analysis": "A single, professional paragraph containing the full editor's guidance (Rationale, Top Fix, Protect List, and Push)."
     }}
     """
-    res = llm.invoke([HumanMessage(content=prompt)])
-    
-    try:
-        content = res.content
-        if "```json" in content:
-            content = content.split("```json")[1].split("```")[0].strip()
-        elif "```" in content:
-            content = content.split("```")[1].split("```")[0].strip()
-        
-        parsed_object = json.loads(content)
-        return {"master_guidance": parsed_object}
-    except Exception:
-        return {"master_guidance": {"headline": "Executive Review Complete", "signals": ["Review finalized"], "verdict": "NEEDS WORK", "analysis": res.content}}
+    structured_llm = llm.with_structured_output(MasterGuidanceOutput)
+    res = structured_llm.invoke([HumanMessage(content=prompt)])
+    return {"master_guidance": res.dict() if hasattr(res, 'dict') else res}
 
 
 

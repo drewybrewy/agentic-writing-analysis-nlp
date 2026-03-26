@@ -41,15 +41,34 @@ class TextProcessor:
         return [item[0] for item in most_common]
     
     def get_sentiment_metrics(self):
-        """Calculates emotional consistency and polarity"""
-        # score is a dict: {'neg': 0.0, 'neu': 0.7, 'pos': 0.3, 'compound': 0.4}
-        scores = analyzer.polarity_scores(self.text)
+        """Calculates emotional consistency and polarity across sentences for long-form reliability"""
+        sentence_scores = []
+        subjectivity_scores = []
+        for sent in self.doc.sents:
+            score = analyzer.polarity_scores(sent.text)
+            sentence_scores.append(score['compound'])
+            subjectivity_scores.append(1.0 - score['neu'])
         
-        # In academic writing, we want to see 'neu' (Neutral) being the highest
+        if not sentence_scores:
+            return {
+                "polarity_score": 0.0,
+                "subjectivity_signal": 0.0,
+                "sentiment_variance": 0.0,
+                "polarized_sentences": 0,
+                "label": "Objective"
+            }
+            
+        avg_score = sum(sentence_scores) / len(sentence_scores)
+        avg_subjectivity = sum(subjectivity_scores) / len(subjectivity_scores)
+        variance = sum((s - avg_score)**2 for s in sentence_scores) / len(sentence_scores)
+        polarized_count = len([s for s in sentence_scores if abs(s) > 0.5])
+        
         return {
-            "polarity_score": scores['compound'], # -1 (Very Neg) to +1 (Very Pos)
-            "subjectivity_signal": 1.0 - scores['neu'], # How much 'emotion' is present
-            "label": "Objective" if abs(scores['compound']) < 0.1 else "Perspective-driven"
+            "polarity_score": round(avg_score, 4),
+            "subjectivity_signal": round(avg_subjectivity, 4),
+            "sentiment_variance": round(variance, 4),
+            "polarized_sentences": polarized_count,
+            "label": "Objective" if abs(avg_score) < 0.1 else "Perspective-driven"
         }
 
     def get_readability_metrics(self):
@@ -69,10 +88,17 @@ class TextProcessor:
             "lexical_diversity": round(diversity_score, 2),
             "label": "Complex" if readability < 40 else "Accessible"
         }
+
     def get_ai_signal(self):
-        """Calculates a basic Predictability (Entropy) score"""
-        # 1. Calculate Shannon Entropy of characters
-        prob = [n_x/len(self.text) for n_x in Counter(self.text).values()]
+        """Calculates Predictability based on word-level Shannon Entropy and Burstiness"""
+        # 1. Word-level Entropy (Unigrams)
+        words = [token.text.lower() for token in self.doc if not token.is_punct and not token.is_space]
+        if not words:
+            return {"predictability_score": 0, "burstiness": 0, "label": "N/A"}
+            
+        word_counts = Counter(words)
+        total_words = len(words)
+        prob = [count/total_words for count in word_counts.values()]
         entropy = -sum(p * math.log2(p) for p in prob)
         
         # 2. Burstiness (Sentence length variation)
@@ -84,7 +110,7 @@ class TextProcessor:
             variance = 0
             
         return {
-            "predictability_score": round(entropy, 2), # Higher is usually more 'human'
-            "burstiness": round(math.sqrt(variance), 2), # Higher is more 'human'
+            "predictability_score": round(entropy, 2), 
+            "burstiness": round(math.sqrt(variance), 2),
             "label": "Highly Structured" if entropy < 4.5 else "Variable"
         }
