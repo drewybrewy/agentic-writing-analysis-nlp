@@ -51,6 +51,7 @@ Each node returns structured output which is rendered in the frontend.
 ```bash
 cd backend
 pip install -r requirements.txt
+python -m spacy download en_core_web_sm
 uvicorn main:app --reload
 
 ```
